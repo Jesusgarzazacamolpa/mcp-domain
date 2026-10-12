@@ -12,17 +12,24 @@ import java.util.UUID;
 @Service
 public class VehicleDomainService {
 
+    private static final String STATUS_CREATED = "CREATED";
+    private static final String STATUS_PAYMENT_CONFIGURED = "PAYMENT_CONFIGURED";
+    private static final String DEFAULT_PAYMENT_TYPE = "FINANCING";
+    private static final String DEFAULT_FINANCIAL_INSTITUTION = "BBVA";
+    private static final int DEFAULT_DOWN_PAYMENT_AMOUNT = 15000;
+    private static final String PURCHASE_ORDER_ID_PREFIX = "po-";
+
     private final VehicleCatalogRemoteRepository vehicleCatalogRemoteRepository;
     private final PurchaseRemoteRepository purchaseRemoteRepository;
-    private final PaymentMethodRemoteRepository paymentMethodRemoteRepository;
+    private final PaymentMethodRemoteRepository paymentMethodRepository;
 
     public VehicleDomainService(
             VehicleCatalogRemoteRepository vehicleCatalogRemoteRepository,
             PurchaseRemoteRepository purchaseRemoteRepository,
-            PaymentMethodRemoteRepository paymentMethodRemoteRepository) {
+            PaymentMethodRemoteRepository paymentMethodRepository) {
         this.vehicleCatalogRemoteRepository = vehicleCatalogRemoteRepository;
         this.purchaseRemoteRepository = purchaseRemoteRepository;
-        this.paymentMethodRemoteRepository = paymentMethodRemoteRepository;
+        this.paymentMethodRepository = paymentMethodRepository;
     }
 
     /**
@@ -41,16 +48,12 @@ public class VehicleDomainService {
         Map<String, Object> response = new HashMap<>();
         response.put("vehicle_id", vehicleId);
 
-        if (vehicleCatalogRemoteRepository != null) {
-            Map<String, Object> remoteVehicle = vehicleCatalogRemoteRepository.getVehicleById(vehicleId);
-            if (remoteVehicle != null && !remoteVehicle.isEmpty()) {
-                response.putAll(remoteVehicle);
-                response.putIfAbsent("vehicle_id", vehicleId);
-            } else {
-                throw new IllegalStateException("Vehicle not found: " + vehicleId);
-            }
+        Map<String, Object> remoteVehicle = vehicleCatalogRemoteRepository.getVehicleById(vehicleId);
+        if (remoteVehicle != null && !remoteVehicle.isEmpty()) {
+            response.putAll(remoteVehicle);
+            response.putIfAbsent("vehicle_id", vehicleId);
         } else {
-            throw new IllegalStateException("Vehicle catalog repository is not available");
+            throw new IllegalStateException("Vehicle not found: " + vehicleId);
         }
 
         return response;
@@ -62,7 +65,6 @@ public class VehicleDomainService {
      * @param vehicleId      ID del vehículo.
      * @param purchaseOrderId ID de la orden de compra (opcional, se genera si no se proporciona).
      * @return Map con el resultado de la compra.
-     * @throws IllegalStateException si el servicio de compras no está disponible.
      */
     public Map<String, Object> registerVehiclePurchase(String vehicleId, String purchaseOrderId) {
         return registerVehiclePurchase(null, vehicleId, null, purchaseOrderId);
@@ -91,12 +93,12 @@ public class VehicleDomainService {
 
         String resolvedPurchaseOrderId = purchaseOrderId != null && !purchaseOrderId.isBlank()
                 ? purchaseOrderId
-                : "po-" + UUID.randomUUID();
+                : PURCHASE_ORDER_ID_PREFIX + UUID.randomUUID();
 
         Map<String, Object> response = new HashMap<>();
         response.put("vehicle_id", vehicleId);
         response.put("purchase_order_id", resolvedPurchaseOrderId);
-        response.put("status", "CREATED");
+        response.put("status", STATUS_CREATED);
         response.put("message", "Purchase order registered successfully");
 
         if (customerId != null && !customerId.isBlank()) {
@@ -106,26 +108,22 @@ public class VehicleDomainService {
             response.put("sales_agent_id", salesAgentId);
         }
 
-        if (purchaseRemoteRepository != null) {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("vehicle_id", vehicleId);
-            payload.put("purchase_order_id", resolvedPurchaseOrderId);
-            if (customerId != null && !customerId.isBlank()) {
-                payload.put("customer_id", customerId);
-            }
-            if (salesAgentId != null && !salesAgentId.isBlank()) {
-                payload.put("sales_agent_id", salesAgentId);
-            }
-            payload.put("status", "CREATED");
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("vehicle_id", vehicleId);
+        payload.put("purchase_order_id", resolvedPurchaseOrderId);
+        if (customerId != null && !customerId.isBlank()) {
+            payload.put("customer_id", customerId);
+        }
+        if (salesAgentId != null && !salesAgentId.isBlank()) {
+            payload.put("sales_agent_id", salesAgentId);
+        }
+        payload.put("status", STATUS_CREATED);
 
-            Map<String, Object> remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
-            if (remotePurchase != null && !remotePurchase.isEmpty()) {
-                response.putAll(remotePurchase);
-                response.putIfAbsent("vehicle_id", vehicleId);
-                response.putIfAbsent("purchase_order_id", resolvedPurchaseOrderId);
-            }
-        } else {
-            throw new IllegalStateException("Purchase repository is not available");
+        Map<String, Object> remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
+        if (remotePurchase != null && !remotePurchase.isEmpty()) {
+            response.putAll(remotePurchase);
+            response.putIfAbsent("vehicle_id", vehicleId);
+            response.putIfAbsent("purchase_order_id", resolvedPurchaseOrderId);
         }
 
         return response;
@@ -137,7 +135,6 @@ public class VehicleDomainService {
      * @param purchaseOrderId ID de la orden de compra.
      * @param paymentType     Tipo de pago (ej. FINANCING).
      * @return Map con el resultado de la configuración.
-     * @throws IllegalStateException si el servicio de pagos no está disponible.
      */
     public Map<String, Object> setPaymentMethod(String purchaseOrderId, String paymentType) {
         return setPaymentMethod(purchaseOrderId, paymentType, null, null);
@@ -161,34 +158,30 @@ public class VehicleDomainService {
             throw new IllegalArgumentException("purchaseOrderId is required");
         }
 
-        String resolvedPaymentType = paymentType != null && !paymentType.isBlank() ? paymentType : "FINANCING";
+        String resolvedPaymentType = paymentType != null && !paymentType.isBlank() ? paymentType : DEFAULT_PAYMENT_TYPE;
         String resolvedFinancialInstitution = financialInstitution != null && !financialInstitution.isBlank()
                 ? financialInstitution
-                : "BBVA";
-        Number resolvedDownPaymentAmount = downPaymentAmount != null ? downPaymentAmount : 15000;
+                : DEFAULT_FINANCIAL_INSTITUTION;
+        Number resolvedDownPaymentAmount = downPaymentAmount != null ? downPaymentAmount : DEFAULT_DOWN_PAYMENT_AMOUNT;
 
         Map<String, Object> response = new HashMap<>();
         response.put("purchase_order_id", purchaseOrderId);
-        response.put("status", "PAYMENT_CONFIGURED");
+        response.put("status", STATUS_PAYMENT_CONFIGURED);
         response.put("payment_type", resolvedPaymentType);
         response.put("financial_institution", resolvedFinancialInstitution);
         response.put("down_payment_amount", resolvedDownPaymentAmount);
 
-        if (paymentMethodRemoteRepository != null) {
-            Map<String, Object> payload = new HashMap<>();
-            payload.put("purchase_order_id", purchaseOrderId);
-            payload.put("payment_type", resolvedPaymentType);
-            payload.put("financial_institution", resolvedFinancialInstitution);
-            payload.put("down_payment_amount", resolvedDownPaymentAmount);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("purchase_order_id", purchaseOrderId);
+        payload.put("payment_type", resolvedPaymentType);
+        payload.put("financial_institution", resolvedFinancialInstitution);
+        payload.put("down_payment_amount", resolvedDownPaymentAmount);
 
-            Map<String, Object> remotePayment = paymentMethodRemoteRepository.registerPayment(payload);
-            if (remotePayment != null && !remotePayment.isEmpty()) {
-                response.putAll(remotePayment);
-                response.putIfAbsent("purchase_order_id", purchaseOrderId);
-                response.putIfAbsent("status", "PAYMENT_CONFIGURED");
-            }
-        } else {
-            throw new IllegalStateException("Payment method repository is not available");
+        Map<String, Object> remotePayment = paymentMethodRepository.registerPayment(payload);
+        if (remotePayment != null && !remotePayment.isEmpty()) {
+            response.putAll(remotePayment);
+            response.putIfAbsent("purchase_order_id", purchaseOrderId);
+            response.putIfAbsent("status", STATUS_PAYMENT_CONFIGURED);
         }
 
         return response;

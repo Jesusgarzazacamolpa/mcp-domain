@@ -22,6 +22,10 @@ import java.util.Map;
 @Configuration
 public class McpServerConfiguration {
 
+    private static final String DEFAULT_PAYMENT_TYPE = "FINANCING";
+    private static final String DEFAULT_FINANCIAL_INSTITUTION = "BBVA";
+    private static final int DEFAULT_DOWN_PAYMENT_AMOUNT = 15000;
+
     @Bean
     public HttpServletStreamableServerTransportProvider mcpTransportProvider() {
         return HttpServletStreamableServerTransportProvider.builder()
@@ -96,19 +100,21 @@ public class McpServerConfiguration {
         Map<String, Object> schema = objectSchema(
                 Map.of(
                         "purchase_order_id", stringSchema("Purchase order identifier"),
-                        "payment_type", Map.of("type", "string", "description", "Payment type; defaults to FINANCING"),
-                        "financial_institution", Map.of("type", "string", "description", "Defaults to BBVA"),
-                        "down_payment_amount", Map.of("type", "number", "description", "Defaults to 15000 MXN")),
+                        "payment_type", Map.of("type", "string", "description", "Payment type; defaults to " + DEFAULT_PAYMENT_TYPE),
+                        "financial_institution", Map.of("type", "string", "description", "Defaults to " + DEFAULT_FINANCIAL_INSTITUTION),
+                        "down_payment_amount", Map.of("type", "number", "description", "Defaults to " + DEFAULT_DOWN_PAYMENT_AMOUNT + " MXN")),
                 List.of("purchase_order_id"));
         return SyncToolSpecification.builder()
                 .tool(McpSchema.Tool.builder("set_payment_method", schema)
-                        .description("Configures payment for a purchase. Defaults: FINANCING, BBVA, 15000 MXN.")
+                        .description("Configures payment for a purchase. Defaults: "
+                                + DEFAULT_PAYMENT_TYPE + ", " + DEFAULT_FINANCIAL_INSTITUTION + ", "
+                                + DEFAULT_DOWN_PAYMENT_AMOUNT + " MXN.")
                         .build())
                 .callHandler((exchange, request) -> result(objectMapper, setPaymentMethodTool.execute(
                         stringArgument(request, "purchase_order_id"),
-                        optionalStringArgument(request, "payment_type", "FINANCING"),
-                        optionalStringArgument(request, "financial_institution", "BBVA"),
-                        optionalNumberArgument(request, "down_payment_amount", 15000))))
+                        optionalStringArgument(request, "payment_type", DEFAULT_PAYMENT_TYPE),
+                        optionalStringArgument(request, "financial_institution", DEFAULT_FINANCIAL_INSTITUTION),
+                        optionalNumberArgument(request, "down_payment_amount", DEFAULT_DOWN_PAYMENT_AMOUNT))))
                 .build();
     }
 
@@ -136,20 +142,20 @@ public class McpServerConfiguration {
         return argument;
     }
 
-        private String optionalStringArgument(McpSchema.CallToolRequest request, String name, String defaultValue) {
-                Object value = request.arguments().get(name);
-                if (value == null) {
-                        return defaultValue;
-                }
-                if (!(value instanceof String argument) || argument.isBlank()) {
-                        throw new IllegalArgumentException("Invalid string argument: " + name);
-                }
-                return argument;
+    private String optionalStringArgument(McpSchema.CallToolRequest request, String name, String defaultValue) {
+        Object value = request.arguments().get(name);
+        if (value == null) {
+            return defaultValue;
         }
+        if (!(value instanceof String argument) || argument.isBlank()) {
+            throw new IllegalArgumentException("Invalid string argument: " + name);
+        }
+        return argument;
+    }
 
-        private Number optionalNumberArgument(McpSchema.CallToolRequest request, String name, Number defaultValue) {
-                return request.arguments().containsKey(name) ? numberArgument(request, name) : defaultValue;
-        }
+    private Number optionalNumberArgument(McpSchema.CallToolRequest request, String name, Number defaultValue) {
+        return request.arguments().containsKey(name) ? numberArgument(request, name) : defaultValue;
+    }
 
     private McpSchema.CallToolResult result(ObjectMapper objectMapper, Map<String, Object> value) {
         try {
