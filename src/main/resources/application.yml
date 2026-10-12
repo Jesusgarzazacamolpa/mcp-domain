@@ -19,7 +19,3 @@ services:
     base-url: ${ORCHESTRATOR_BASE_URL:http://localhost:8080}
   auto-database:
     base-url: ${AUTO_DATABASE_URL:http://localhost:8083}
-
-auto:
-  database:
-    url: ${AUTO_DATABASE_URL:http://localhost:8083}
