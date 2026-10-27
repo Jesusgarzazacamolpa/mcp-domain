@@ -1,5 +1,6 @@
 package com.floworchestrator.mcpdomain;
 
+import com.floworchestrator.mcpdomain.config.McpServerConfiguration;
 import io.modelcontextprotocol.client.McpClient;
 import io.modelcontextprotocol.client.McpSyncClient;
 import io.modelcontextprotocol.client.transport.HttpClientStreamableHttpTransport;
@@ -8,12 +9,12 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.assertj.core.api.Assertions.assertThat;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 class McpServerIntegrationTest {
@@ -22,7 +23,7 @@ class McpServerIntegrationTest {
     private int port;
 
     @Test
-    void advertisesToolsAndRejectsInvalidArgumentsOverStreamableHttp() {
+    void advertisesToolsResourcesAndActionableErrorsOverStreamableHttp() {
         HttpClientStreamableHttpTransport transport = HttpClientStreamableHttpTransport
                 .builder("http://localhost:" + port)
                 .endpoint("/mcp")
@@ -31,27 +32,60 @@ class McpServerIntegrationTest {
 
         try {
             client.initialize();
-            Set<String> toolNames = client.listTools().tools().stream()
-                    .map(McpSchema.Tool::name)
-                    .collect(Collectors.toSet());
 
-            assertEquals(Set.of(
-                    "get_vehicle_information",
-                    "register_vehicle_purchase",
-                    "set_payment_method"), toolNames);
-                McpSchema.Tool paymentTool = client.listTools().tools().stream()
-                    .filter(tool -> "set_payment_method".equals(tool.name()))
+            assertThat(client.getServerInstructions()).contains("idempotente");
+
+            List<McpSchema.Tool> tools = client.listTools().tools();
+            Set<String> toolNames = tools.stream().map(McpSchema.Tool::name).collect(Collectors.toSet());
+            assertThat(toolNames).containsExactlyInAnyOrder(
+                    "get_vehicle_information", "register_vehicle_purchase", "set_payment_method");
+
+            McpSchema.Tool vehicleTool = toolNamed(tools, "get_vehicle_information");
+            assertThat(vehicleTool.inputSchema().get("required")).isEqualTo(List.of("vehicle_id"));
+
+            McpSchema.Tool purchaseTool = toolNamed(tools, "register_vehicle_purchase");
+            assertThat(propertiesOf(purchaseTool)).contains("idempotency_key");
+            assertThat(purchaseTool.description()).contains("idempotente");
+
+            McpSchema.Tool paymentTool = toolNamed(tools, "set_payment_method");
+            assertThat(paymentTool.inputSchema().get("required")).isEqualTo(List.of("purchase_order_id"));
+
+            List<McpSchema.Resource> resources = client.listResources().resources();
+            assertThat(resources).extracting(McpSchema.Resource::uri)
+                    .contains(McpServerConfiguration.PAYMENT_DEFAULTS_URI);
+            McpSchema.Resource paymentDefaults = resources.stream()
+                    .filter(resource -> McpServerConfiguration.PAYMENT_DEFAULTS_URI.equals(resource.uri()))
                     .findFirst()
                     .orElseThrow();
-                assertEquals(java.util.List.of("purchase_order_id"), paymentTool.inputSchema().get("required"));
+            String resourceText = ((McpSchema.TextResourceContents)
+                    client.readResource(paymentDefaults).contents().get(0)).text();
+            assertThat(resourceText).contains("FINANCING").contains("BBVA").contains("15000");
 
             McpSchema.CallToolResult result = client.callTool(
                     McpSchema.CallToolRequest.builder("get_vehicle_information")
                             .arguments(Map.of())
                             .build());
-            assertTrue(Boolean.TRUE.equals(result.isError()));
+            assertThat(result.isError()).isTrue();
+            String errorText = ((McpSchema.TextContent) result.content().get(0)).text();
+            assertThat(errorText)
+                    .contains("\"error_code\":\"MISSING_ARGUMENT\"")
+                    .contains("\"how_to_fix\"")
+                    .contains("el identificador del vehículo");
         } finally {
-            client.closeGracefully();
+            client.close();
         }
+    }
+
+    private static McpSchema.Tool toolNamed(List<McpSchema.Tool> tools, String name) {
+        return tools.stream()
+                .filter(tool -> name.equals(tool.name()))
+                .findFirst()
+                .orElseThrow();
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Set<String> propertiesOf(McpSchema.Tool tool) {
+        Map<String, Object> properties = (Map<String, Object>) tool.inputSchema().get("properties");
+        return properties.keySet();
     }
 }

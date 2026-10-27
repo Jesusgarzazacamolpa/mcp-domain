@@ -3,179 +3,170 @@ package com.floworchestrator.mcpdomain.service;
 import com.floworchestrator.mcpdomain.remotos.PaymentMethodRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.PurchaseRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.VehicleCatalogRemoteRepository;
+import com.floworchestrator.mcpdomain.tools.ToolFlowCodes;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
 @Service
+@Slf4j
 public class VehicleDomainService {
 
     private static final String STATUS_CREATED = "CREATED";
     private static final String STATUS_PAYMENT_CONFIGURED = "PAYMENT_CONFIGURED";
-    private static final String DEFAULT_PAYMENT_TYPE = "FINANCING";
-    private static final String DEFAULT_FINANCIAL_INSTITUTION = "BBVA";
-    private static final int DEFAULT_DOWN_PAYMENT_AMOUNT = 15000;
     private static final String PURCHASE_ORDER_ID_PREFIX = "po-";
+    private static final String KEY_SEPARATOR = "\u0001";
 
     private final VehicleCatalogRemoteRepository vehicleCatalogRemoteRepository;
     private final PurchaseRemoteRepository purchaseRemoteRepository;
     private final PaymentMethodRemoteRepository paymentMethodRepository;
+    private final IdempotencyStore idempotencyStore;
 
     public VehicleDomainService(
             VehicleCatalogRemoteRepository vehicleCatalogRemoteRepository,
             PurchaseRemoteRepository purchaseRemoteRepository,
-            PaymentMethodRemoteRepository paymentMethodRepository) {
+            PaymentMethodRemoteRepository paymentMethodRepository,
+            IdempotencyStore idempotencyStore) {
         this.vehicleCatalogRemoteRepository = vehicleCatalogRemoteRepository;
         this.purchaseRemoteRepository = purchaseRemoteRepository;
         this.paymentMethodRepository = paymentMethodRepository;
+        this.idempotencyStore = idempotencyStore;
     }
 
     /**
-     * Obtiene la información de un vehículo por su ID.
-     * Lanza una excepción si el vehículo no se encuentra.
+     * Obtiene la información de catálogo de un vehículo.
      *
-     * @param vehicleId ID del vehículo a consultar.
-     * @return Map con los datos del vehículo.
-     * @throws IllegalStateException si el vehículo no existe.
+     * @throws VehicleNotFoundException si el vehículo no existe en el catálogo.
      */
     public Map<String, Object> getVehicleInformation(String vehicleId) {
-        if (vehicleId == null || vehicleId.isBlank()) {
-            throw new IllegalArgumentException("vehicleId is required");
-        }
+        requireText(vehicleId, "vehicleId");
 
-        Map<String, Object> response = new HashMap<>();
-        response.put("vehicle_id", vehicleId);
-
+        log.info("[{}] Consultando catálogo de vehículos | vehicleId={}",
+                ToolFlowCodes.VEHICLE_INFORMATION, vehicleId);
         Map<String, Object> remoteVehicle = vehicleCatalogRemoteRepository.getVehicleById(vehicleId);
-        if (remoteVehicle != null && !remoteVehicle.isEmpty()) {
-            response.putAll(remoteVehicle);
-            response.putIfAbsent("vehicle_id", vehicleId);
-        } else {
-            throw new IllegalStateException("Vehicle not found: " + vehicleId);
+        if (remoteVehicle == null || remoteVehicle.isEmpty()) {
+            log.warn("[{}] Vehículo no encontrado en el catálogo | vehicleId={}",
+                    ToolFlowCodes.VEHICLE_INFORMATION, vehicleId);
+            throw new VehicleNotFoundException(vehicleId);
         }
+        log.info("[{}] Vehículo encontrado | vehicleId={}, modelId={}, availability={}",
+                ToolFlowCodes.VEHICLE_INFORMATION, vehicleId,
+                remoteVehicle.get("model_id"), remoteVehicle.get("availability"));
 
-        return response;
-    }
-
-    /**
-     * Registra una compra de vehículo.
-     *
-     * @param vehicleId      ID del vehículo.
-     * @param purchaseOrderId ID de la orden de compra (opcional, se genera si no se proporciona).
-     * @return Map con el resultado de la compra.
-     */
-    public Map<String, Object> registerVehiclePurchase(String vehicleId, String purchaseOrderId) {
-        return registerVehiclePurchase(null, vehicleId, null, purchaseOrderId);
-    }
-
-    /**
-     * Registra una compra de vehículo con todos los datos.
-     *
-     * @param customerId    ID del cliente.
-     * @param vehicleId     ID del vehículo.
-     * @param salesAgentId  ID del agente de ventas.
-     * @return Map con el resultado de la compra.
-     */
-    public Map<String, Object> registerVehiclePurchase(String customerId, String vehicleId, String salesAgentId) {
-        return registerVehiclePurchase(customerId, vehicleId, salesAgentId, null);
-    }
-
-    private Map<String, Object> registerVehiclePurchase(
-            String customerId,
-            String vehicleId,
-            String salesAgentId,
-            String purchaseOrderId) {
-        if (vehicleId == null || vehicleId.isBlank()) {
-            throw new IllegalArgumentException("vehicleId is required");
-        }
-
-        String resolvedPurchaseOrderId = purchaseOrderId != null && !purchaseOrderId.isBlank()
-                ? purchaseOrderId
-                : PURCHASE_ORDER_ID_PREFIX + UUID.randomUUID();
-
-        Map<String, Object> response = new HashMap<>();
+        Map<String, Object> response = new LinkedHashMap<>();
         response.put("vehicle_id", vehicleId);
-        response.put("purchase_order_id", resolvedPurchaseOrderId);
-        response.put("status", STATUS_CREATED);
-        response.put("message", "Purchase order registered successfully");
-
-        if (customerId != null && !customerId.isBlank()) {
-            response.put("customer_id", customerId);
-        }
-        if (salesAgentId != null && !salesAgentId.isBlank()) {
-            response.put("sales_agent_id", salesAgentId);
-        }
-
-        Map<String, Object> payload = new HashMap<>();
-        payload.put("vehicle_id", vehicleId);
-        payload.put("purchase_order_id", resolvedPurchaseOrderId);
-        if (customerId != null && !customerId.isBlank()) {
-            payload.put("customer_id", customerId);
-        }
-        if (salesAgentId != null && !salesAgentId.isBlank()) {
-            payload.put("sales_agent_id", salesAgentId);
-        }
-        payload.put("status", STATUS_CREATED);
-
-        Map<String, Object> remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
-        if (remotePurchase != null && !remotePurchase.isEmpty()) {
-            response.putAll(remotePurchase);
-            response.putIfAbsent("vehicle_id", vehicleId);
-            response.putIfAbsent("purchase_order_id", resolvedPurchaseOrderId);
-        }
-
+        response.putAll(remoteVehicle);
+        response.putIfAbsent("vehicle_id", vehicleId);
         return response;
     }
 
     /**
-     * Configura el método de pago para una orden de compra.
-     *
-     * @param purchaseOrderId ID de la orden de compra.
-     * @param paymentType     Tipo de pago (ej. FINANCING).
-     * @return Map con el resultado de la configuración.
+     * Registra una compra. La orden de compra es determinista para la misma clave de
+     * idempotencia, de modo que un reintento no genera una orden duplicada.
      */
-    public Map<String, Object> setPaymentMethod(String purchaseOrderId, String paymentType) {
-        return setPaymentMethod(purchaseOrderId, paymentType, null, null);
+    public Map<String, Object> registerVehiclePurchase(
+            String customerId, String vehicleId, String salesAgentId, String idempotencyKey) {
+        requireText(customerId, "customerId");
+        requireText(vehicleId, "vehicleId");
+        requireText(salesAgentId, "salesAgentId");
+
+        String key = idempotencyKey != null && !idempotencyKey.isBlank()
+                ? "purchase:key:" + idempotencyKey.trim()
+                : "purchase:derived:" + stableId(customerId, vehicleId, salesAgentId);
+        String purchaseOrderId = PURCHASE_ORDER_ID_PREFIX + stableId(key);
+        log.info("[{}] Preparando orden de compra | purchaseOrderId={}, origenClave={}",
+                ToolFlowCodes.REGISTER_PURCHASE, purchaseOrderId,
+                idempotencyKey != null && !idempotencyKey.isBlank() ? "idempotency_key" : "derivada");
+
+        Map<String, Object> result = idempotencyStore.getOrCompute(key,
+                () -> createPurchaseOrder(customerId, vehicleId, salesAgentId, purchaseOrderId));
+        log.info("[{}] Compra procesada | purchaseOrderId={}, status={}, idempotentReplay={}",
+                ToolFlowCodes.REGISTER_PURCHASE, result.get("purchase_order_id"),
+                result.get("status"), result.get("idempotent_replay"));
+        return result;
     }
 
     /**
-     * Configura el método de pago para una orden de compra con todos los datos.
-     *
-     * @param purchaseOrderId     ID de la orden de compra.
-     * @param paymentType         Tipo de pago.
-     * @param financialInstitution Institución financiera.
-     * @param downPaymentAmount   Enganche.
-     * @return Map con el resultado de la configuración.
+     * Configura el método de pago. Los valores omitidos usan los valores por defecto.
      */
     public Map<String, Object> setPaymentMethod(
             String purchaseOrderId,
             String paymentType,
             String financialInstitution,
             Number downPaymentAmount) {
-        if (purchaseOrderId == null || purchaseOrderId.isBlank()) {
-            throw new IllegalArgumentException("purchaseOrderId is required");
+        requireText(purchaseOrderId, "purchaseOrderId");
+        String resolvedPaymentType = defaultIfBlank(paymentType, PaymentDefaults.PAYMENT_TYPE);
+        String resolvedFinancialInstitution = defaultIfBlank(
+                financialInstitution, PaymentDefaults.FINANCIAL_INSTITUTION);
+        Number resolvedDownPaymentAmount = downPaymentAmount != null
+                ? downPaymentAmount
+                : PaymentDefaults.DOWN_PAYMENT_AMOUNT;
+        if (resolvedDownPaymentAmount.doubleValue() < 0) {
+            throw new IllegalArgumentException("downPaymentAmount debe ser cero o positivo");
         }
 
-        String resolvedPaymentType = paymentType != null && !paymentType.isBlank() ? paymentType : DEFAULT_PAYMENT_TYPE;
-        String resolvedFinancialInstitution = financialInstitution != null && !financialInstitution.isBlank()
-                ? financialInstitution
-                : DEFAULT_FINANCIAL_INSTITUTION;
-        Number resolvedDownPaymentAmount = downPaymentAmount != null ? downPaymentAmount : DEFAULT_DOWN_PAYMENT_AMOUNT;
+        String key = "payment:" + stableId(
+                purchaseOrderId, resolvedPaymentType, resolvedFinancialInstitution, amountKey(resolvedDownPaymentAmount));
+        log.info("[{}] Preparando configuración de pago | purchaseOrderId={}, paymentType={}, "
+                        + "financialInstitution={}, downPaymentAmount={}",
+                ToolFlowCodes.SET_PAYMENT_METHOD, purchaseOrderId, resolvedPaymentType,
+                resolvedFinancialInstitution, resolvedDownPaymentAmount);
+        Map<String, Object> result = idempotencyStore.getOrCompute(key, () -> registerPayment(
+                purchaseOrderId, resolvedPaymentType, resolvedFinancialInstitution, resolvedDownPaymentAmount));
+        log.info("[{}] Pago procesado | purchaseOrderId={}, status={}, idempotentReplay={}",
+                ToolFlowCodes.SET_PAYMENT_METHOD, result.get("purchase_order_id"),
+                result.get("status"), result.get("idempotent_replay"));
+        return result;
+    }
 
-        Map<String, Object> response = new HashMap<>();
+    private Map<String, Object> createPurchaseOrder(
+            String customerId, String vehicleId, String salesAgentId, String purchaseOrderId) {
+        Map<String, Object> response = new LinkedHashMap<>();
+        response.put("vehicle_id", vehicleId);
+        response.put("purchase_order_id", purchaseOrderId);
+        response.put("customer_id", customerId);
+        response.put("sales_agent_id", salesAgentId);
+        response.put("status", STATUS_CREATED);
+        response.put("message", "Orden de compra registrada correctamente");
+
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("vehicle_id", vehicleId);
+        payload.put("purchase_order_id", purchaseOrderId);
+        payload.put("customer_id", customerId);
+        payload.put("sales_agent_id", salesAgentId);
+        payload.put("status", STATUS_CREATED);
+
+        Map<String, Object> remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
+        if (remotePurchase != null && !remotePurchase.isEmpty()) {
+            response.putAll(remotePurchase);
+            response.putIfAbsent("vehicle_id", vehicleId);
+            response.putIfAbsent("purchase_order_id", purchaseOrderId);
+        }
+        log.info("[{}] Orden de compra registrada | purchaseOrderId={}, status={}",
+                ToolFlowCodes.REGISTER_PURCHASE, response.get("purchase_order_id"), response.get("status"));
+        return response;
+    }
+
+    private Map<String, Object> registerPayment(
+            String purchaseOrderId, String paymentType, String financialInstitution, Number downPaymentAmount) {
+        Map<String, Object> response = new LinkedHashMap<>();
         response.put("purchase_order_id", purchaseOrderId);
         response.put("status", STATUS_PAYMENT_CONFIGURED);
-        response.put("payment_type", resolvedPaymentType);
-        response.put("financial_institution", resolvedFinancialInstitution);
-        response.put("down_payment_amount", resolvedDownPaymentAmount);
+        response.put("payment_type", paymentType);
+        response.put("financial_institution", financialInstitution);
+        response.put("down_payment_amount", downPaymentAmount);
 
         Map<String, Object> payload = new HashMap<>();
         payload.put("purchase_order_id", purchaseOrderId);
-        payload.put("payment_type", resolvedPaymentType);
-        payload.put("financial_institution", resolvedFinancialInstitution);
-        payload.put("down_payment_amount", resolvedDownPaymentAmount);
+        payload.put("payment_type", paymentType);
+        payload.put("financial_institution", financialInstitution);
+        payload.put("down_payment_amount", downPaymentAmount);
 
         Map<String, Object> remotePayment = paymentMethodRepository.registerPayment(payload);
         if (remotePayment != null && !remotePayment.isEmpty()) {
@@ -183,7 +174,27 @@ public class VehicleDomainService {
             response.putIfAbsent("purchase_order_id", purchaseOrderId);
             response.putIfAbsent("status", STATUS_PAYMENT_CONFIGURED);
         }
-
+        log.info("[{}] Método de pago registrado | purchaseOrderId={}, status={}",
+                ToolFlowCodes.SET_PAYMENT_METHOD, response.get("purchase_order_id"), response.get("status"));
         return response;
+    }
+
+    private static String stableId(String... parts) {
+        String joined = String.join(KEY_SEPARATOR, parts);
+        return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
+    }
+
+    private static String amountKey(Number amount) {
+        return new BigDecimal(amount.toString()).stripTrailingZeros().toPlainString();
+    }
+
+    private static String defaultIfBlank(String value, String defaultValue) {
+        return value != null && !value.isBlank() ? value.trim() : defaultValue;
+    }
+
+    private static void requireText(String value, String field) {
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("El campo '" + field + "' es obligatorio");
+        }
     }
 }
