@@ -3,6 +3,8 @@ package com.floworchestrator.mcpdomain.service;
 import com.floworchestrator.mcpdomain.remotos.PaymentMethodRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.PurchaseRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.VehicleCatalogRemoteRepository;
+import feign.FeignException;
+import feign.Request;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,6 +12,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.charset.StandardCharsets;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -115,6 +118,33 @@ class VehicleDomainServiceTest {
 
         assertThat(first.get("purchase_order_id")).isNotEqualTo(second.get("purchase_order_id"));
         verify(purchaseRemoteRepository, times(2)).createPurchaseOrder(anyMap());
+    }
+
+    @Test
+    void sameExplicitKeyWithDifferentVehicleDoesNotCollide() {
+        when(purchaseRemoteRepository.createPurchaseOrder(anyMap())).thenReturn(Map.of());
+
+        Map<String, Object> first = service.registerVehiclePurchase("c-1", "v-1", "a-1", "key-1");
+        Map<String, Object> second = service.registerVehiclePurchase("c-1", "v-2", "a-1", "key-1");
+
+        assertThat(second.get("purchase_order_id")).isNotEqualTo(first.get("purchase_order_id"));
+        verify(purchaseRemoteRepository, times(2)).createPurchaseOrder(anyMap());
+    }
+
+    @Test
+    void conflictFromDomainReusesExistingOrder() {
+        Request request = Request.create(Request.HttpMethod.POST,
+                "http://localhost:8083/purchase-orders", Map.of(), new byte[0],
+                StandardCharsets.UTF_8, null);
+        when(purchaseRemoteRepository.createPurchaseOrder(anyMap()))
+                .thenThrow(new FeignException.Conflict("409 Conflict", request, new byte[0], Map.of()));
+
+        Map<String, Object> result = service.registerVehiclePurchase("c-1", "v-1", "a-1", null);
+
+        assertThat(result)
+                .containsEntry("status", "CREATED")
+                .containsEntry("reused_existing_order", true);
+        assertThat(result.get("purchase_order_id").toString()).startsWith("po-");
     }
 
     @Test

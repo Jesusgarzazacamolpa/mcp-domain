@@ -4,6 +4,7 @@ import com.floworchestrator.mcpdomain.remotos.PaymentMethodRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.PurchaseRemoteRepository;
 import com.floworchestrator.mcpdomain.remotos.VehicleCatalogRemoteRepository;
 import com.floworchestrator.mcpdomain.tools.ToolFlowCodes;
+import feign.FeignException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -76,9 +77,13 @@ public class VehicleDomainService {
         requireText(vehicleId, "vehicleId");
         requireText(salesAgentId, "salesAgentId");
 
+        // La clave incluye los datos de la compra: una clave explícita reutilizada
+        // con otro vehículo/cliente no debe apuntar a la misma orden, porque el
+        // dominio la rechazaría con un conflicto permanente.
+        String businessKey = stableId(customerId, vehicleId, salesAgentId);
         String key = idempotencyKey != null && !idempotencyKey.isBlank()
-                ? "purchase:key:" + idempotencyKey.trim()
-                : "purchase:derived:" + stableId(customerId, vehicleId, salesAgentId);
+                ? "purchase:key:" + stableId(businessKey, idempotencyKey.trim())
+                : "purchase:derived:" + businessKey;
         String purchaseOrderId = PURCHASE_ORDER_ID_PREFIX + stableId(key);
         log.info("[{}] Preparando orden de compra | purchaseOrderId={}, origenClave={}",
                 ToolFlowCodes.REGISTER_PURCHASE, purchaseOrderId,
@@ -142,7 +147,18 @@ public class VehicleDomainService {
         payload.put("sales_agent_id", salesAgentId);
         payload.put("status", STATUS_CREATED);
 
-        Map<String, Object> remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
+        Map<String, Object> remotePurchase;
+        try {
+            remotePurchase = purchaseRemoteRepository.createPurchaseOrder(payload);
+        } catch (FeignException.Conflict conflict) {
+            // El identificador se deriva de los datos, así que un conflicto significa
+            // que la orden ya existía (por ejemplo, con un vehicle-domain sin reiniciar).
+            log.info("[{}] La orden ya existía en el dominio; se reutiliza | purchaseOrderId={}, status={}",
+                    ToolFlowCodes.REGISTER_PURCHASE, purchaseOrderId, conflict.status());
+            response.put("message", "La orden ya estaba registrada; se reutiliza la existente");
+            response.put("reused_existing_order", true);
+            return response;
+        }
         if (remotePurchase != null && !remotePurchase.isEmpty()) {
             response.putAll(remotePurchase);
             response.putIfAbsent("vehicle_id", vehicleId);

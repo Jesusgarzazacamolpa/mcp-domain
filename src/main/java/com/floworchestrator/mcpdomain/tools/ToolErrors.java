@@ -37,14 +37,30 @@ public final class ToolErrors {
                     "Confirma los identificadores con el usuario antes de reintentar. No repitas la misma llamada.",
                     null, false);
         }
+        if (exception instanceof FeignException.Conflict conflict) {
+            log.info("[{}] {} operación ya registrada: status={}", flowCode, toolName, conflict.status());
+            return ToolResponse.error(toolName, "ALREADY_EXISTS",
+                    "La operación ya fue registrada previamente con esos mismos datos.",
+                    "No repitas la llamada: usa el recurso ya existente y continúa con el siguiente paso.",
+                    null, false);
+        }
         if (exception instanceof FeignException feignException) {
+            int status = feignException.status();
+            if (status >= 400 && status < 500) {
+                log.warn("[{}] {} rechazó la solicitud: status={}, error={}",
+                        flowCode, toolName, status, exception.getMessage());
+                return ToolResponse.error(toolName, "INVALID_ARGUMENT",
+                        "El servicio downstream rechazó la solicitud (estado HTTP " + status + ").",
+                        "Corrige los argumentos enviados antes de volver a llamar a la herramienta.",
+                        null, false);
+            }
             log.error("[{}] {} fallo downstream: status={}, error={}",
-                    flowCode, toolName, feignException.status(), exception.getMessage());
+                    flowCode, toolName, status, exception.getMessage());
             return ToolResponse.error(toolName, "DEPENDENCY_UNAVAILABLE",
                     "Un servicio downstream falló al procesar la solicitud (estado HTTP "
-                            + feignException.status() + ").",
-                    "No reintentes de inmediato. Informa al usuario que la operación no se pudo completar "
-                            + "en este momento e inténtalo más tarde.",
+                            + status + ").",
+                    "El fallo es transitorio: reintenta la misma llamada una vez. "
+                            + "Si vuelve a fallar, informa al usuario que la operación no se pudo completar.",
                     null, true);
         }
         if (exception instanceof IllegalArgumentException) {

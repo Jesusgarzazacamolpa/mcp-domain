@@ -108,6 +108,35 @@ class RegisterVehiclePurchaseToolTest {
     }
 
     @Test
+    void conflictIsNotRetryableAndPointsToExistingResource() {
+        FeignException conflict = mock(FeignException.Conflict.class);
+        when(conflict.status()).thenReturn(409);
+        when(vehicleDomainService.registerVehiclePurchase("c-1", "v-1", "a-1", null)).thenThrow(conflict);
+
+        ToolResponse response = tool.execute(Map.of(
+                "customer_id", "c-1", "vehicle_id", "v-1", "sales_agent_id", "a-1"));
+
+        assertThat(response.payload())
+                .containsEntry("error_code", "ALREADY_EXISTS")
+                .containsEntry("retryable", false);
+        assertThat(response.payload().get("how_to_fix").toString()).contains("continúa");
+    }
+
+    @Test
+    void clientErrorIsNotRetryable() {
+        FeignException badRequest = mock(FeignException.class);
+        when(badRequest.status()).thenReturn(400);
+        when(vehicleDomainService.registerVehiclePurchase("c-1", "v-1", "a-1", null)).thenThrow(badRequest);
+
+        ToolResponse response = tool.execute(Map.of(
+                "customer_id", "c-1", "vehicle_id", "v-1", "sales_agent_id", "a-1"));
+
+        assertThat(response.payload())
+                .containsEntry("error_code", "INVALID_ARGUMENT")
+                .containsEntry("retryable", false);
+    }
+
+    @Test
     void nullArgumentsReturnMissingArgumentError() {
         ToolResponse response = tool.execute(null);
 
