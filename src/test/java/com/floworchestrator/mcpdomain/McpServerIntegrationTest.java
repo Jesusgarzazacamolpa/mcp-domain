@@ -38,7 +38,8 @@ class McpServerIntegrationTest {
             List<McpSchema.Tool> tools = client.listTools().tools();
             Set<String> toolNames = tools.stream().map(McpSchema.Tool::name).collect(Collectors.toSet());
             assertThat(toolNames).containsExactlyInAnyOrder(
-                    "get_vehicle_information", "register_vehicle_purchase", "set_payment_method");
+                    "get_vehicle_information", "register_vehicle_purchase", "set_payment_method",
+                    "request_financing_approval");
 
             McpSchema.Tool vehicleTool = toolNamed(tools, "get_vehicle_information");
             assertThat(vehicleTool.inputSchema().get("required")).isEqualTo(List.of("vehicle_id"));
@@ -49,6 +50,10 @@ class McpServerIntegrationTest {
 
             McpSchema.Tool paymentTool = toolNamed(tools, "set_payment_method");
             assertThat(paymentTool.inputSchema().get("required")).isEqualTo(List.of("purchase_order_id"));
+
+            McpSchema.Tool financingTool = toolNamed(tools, "request_financing_approval");
+            assertThat(financingTool.inputSchema().get("required")).isEqualTo(List.of("purchase_order_id"));
+            assertThat(propertiesOf(financingTool)).contains("decision");
 
             List<McpSchema.Resource> resources = client.listResources().resources();
             assertThat(resources).extracting(McpSchema.Resource::uri)

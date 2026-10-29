@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.floworchestrator.mcpdomain.service.PaymentDefaults;
 import com.floworchestrator.mcpdomain.service.VehicleDomainService;
 import com.floworchestrator.mcpdomain.tools.RegisterVehiclePurchaseTool;
+import com.floworchestrator.mcpdomain.tools.RequestFinancingApprovalTool;
 import com.floworchestrator.mcpdomain.tools.SetPaymentMethodTool;
 import com.floworchestrator.mcpdomain.tools.ToolResponse;
 import com.floworchestrator.mcpdomain.tools.VehicleInformationTool;
@@ -189,13 +190,15 @@ class McpServerConfigurationTest {
                 new VehicleInformationTool(service),
                 new RegisterVehiclePurchaseTool(service),
                 new SetPaymentMethodTool(service),
+                new RequestFinancingApprovalTool(),
                 objectMapper);
 
         try {
             assertThat(server.listTools())
                     .extracting(McpSchema.Tool::name)
                     .containsExactlyInAnyOrder(
-                            "get_vehicle_information", "register_vehicle_purchase", "set_payment_method");
+                            "get_vehicle_information", "register_vehicle_purchase", "set_payment_method",
+                            "request_financing_approval");
             assertThat(server.listResources())
                     .extracting(McpSchema.Resource::uri)
                     .contains(McpServerConfiguration.PAYMENT_DEFAULTS_URI);

@@ -14,6 +14,10 @@ public final class ToolArguments {
     private ToolArguments() {
     }
 
+    /**
+     * Obtiene un texto obligatorio ya recortado; rechaza valores ausentes, no textuales, vacíos
+     * o de más de 128 caracteres con un {@link ToolException}.
+     */
     public static String requireString(Map<String, Object> arguments, String field, String toolName) {
         Object value = arguments.get(field);
         if (value == null) {
@@ -33,6 +37,10 @@ public final class ToolArguments {
         return trimmed;
     }
 
+    /**
+     * Devuelve el texto recortado del campo o {@code defaultValue} si falta o está vacío;
+     * valida que el valor recibido sea una cadena.
+     */
     public static String optionalString(
             Map<String, Object> arguments, String field, String defaultValue, String toolName) {
         Object value = arguments.get(field);
@@ -46,6 +54,10 @@ public final class ToolArguments {
         return trimmed.isEmpty() ? defaultValue : trimmed;
     }
 
+    /**
+     * Devuelve el número del campo o {@code defaultValue} si falta; rechaza valores no numéricos,
+     * no finitos o negativos.
+     */
     public static Number optionalNumber(
             Map<String, Object> arguments, String field, Number defaultValue, String toolName) {
         Object value = arguments.get(field);
@@ -61,6 +73,9 @@ public final class ToolArguments {
         return number;
     }
 
+    /**
+     * Lee {@code idempotency_key} de forma opcional y valida que no exceda 128 caracteres.
+     */
     public static String optionalIdempotencyKey(Map<String, Object> arguments, String toolName) {
         String key = optionalString(arguments, "idempotency_key", null, toolName);
         if (key != null && key.length() > MAX_IDEMPOTENCY_KEY_LENGTH) {

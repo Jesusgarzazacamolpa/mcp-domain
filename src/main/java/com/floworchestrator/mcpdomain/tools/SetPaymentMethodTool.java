@@ -8,6 +8,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
+/**
+ * Tool MCP {@code set_payment_method}: configura el pago de una orden de compra y sustituye
+ * los argumentos omitidos por los valores por defecto de {@link PaymentDefaults}.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -17,6 +21,10 @@ public class SetPaymentMethodTool {
 
     private final VehicleDomainService vehicleDomainService;
 
+    /**
+     * Ejecuta {@code set_payment_method}; solo {@code purchase_order_id} es obligatorio y devuelve
+     * el método de pago resuelto con su estado, o un error estructurado.
+     */
     public ToolResponse execute(Map<String, Object> arguments) {
         return ToolSupport.execute(TOOL_NAME, arguments, args -> {
             String purchaseOrderId = ToolArguments.requireString(args, "purchase_order_id", TOOL_NAME);

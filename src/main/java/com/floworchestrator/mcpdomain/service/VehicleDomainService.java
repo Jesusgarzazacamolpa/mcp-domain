@@ -15,6 +15,10 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * Orquesta las operaciones de negocio sobre vehículos: consulta el catálogo y registra
+ * compras y métodos de pago en el servicio remoto, aplicando idempotencia y valores por defecto.
+ */
 @Service
 @Slf4j
 public class VehicleDomainService {
@@ -41,9 +45,11 @@ public class VehicleDomainService {
     }
 
     /**
-     * Obtiene la información de catálogo de un vehículo.
+     * Obtiene la información de catálogo de un vehículo consultando {@code GET /vehicles/{id}};
+     * se usa en la tool {@code get_vehicle_information} antes de cotizar o registrar una compra.
      *
      * @throws VehicleNotFoundException si el vehículo no existe en el catálogo.
+     * @throws IllegalArgumentException si {@code vehicleId} está vacío.
      */
     public Map<String, Object> getVehicleInformation(String vehicleId) {
         requireText(vehicleId, "vehicleId");
@@ -68,8 +74,11 @@ public class VehicleDomainService {
     }
 
     /**
-     * Registra una compra. La orden de compra es determinista para la misma clave de
-     * idempotencia, de modo que un reintento no genera una orden duplicada.
+     * Registra una compra enviando la orden a {@code POST /purchase-orders}. La orden es
+     * determinista para la misma clave de idempotencia, de modo que un reintento no la duplica;
+     * si se omite la clave, esta se deriva de cliente, vehículo y agente.
+     *
+     * @throws IllegalArgumentException si falta alguno de los identificadores obligatorios.
      */
     public Map<String, Object> registerVehiclePurchase(
             String customerId, String vehicleId, String salesAgentId, String idempotencyKey) {
@@ -98,7 +107,10 @@ public class VehicleDomainService {
     }
 
     /**
-     * Configura el método de pago. Los valores omitidos usan los valores por defecto.
+     * Configura el método de pago aplicando los valores por defecto de {@link PaymentDefaults},
+     * lo envía a {@code POST /payment-methods} y deduplica por la combinación ya resuelta.
+     *
+     * @throws IllegalArgumentException si la orden está vacía o el enganche es negativo.
      */
     public Map<String, Object> setPaymentMethod(
             String purchaseOrderId,
@@ -130,6 +142,10 @@ public class VehicleDomainService {
         return result;
     }
 
+    /**
+     * Crea la orden en el servicio remoto; un HTTP 409 se interpreta como orden ya existente
+     * y se devuelve sin error, reutilizando el identificador local.
+     */
     private Map<String, Object> createPurchaseOrder(
             String customerId, String vehicleId, String salesAgentId, String purchaseOrderId) {
         Map<String, Object> response = new LinkedHashMap<>();
@@ -169,6 +185,9 @@ public class VehicleDomainService {
         return response;
     }
 
+    /**
+     * Envía el pago al servicio remoto y combina su respuesta con los datos resueltos enviados.
+     */
     private Map<String, Object> registerPayment(
             String purchaseOrderId, String paymentType, String financialInstitution, Number downPaymentAmount) {
         Map<String, Object> response = new LinkedHashMap<>();
@@ -195,11 +214,19 @@ public class VehicleDomainService {
         return response;
     }
 
+    /**
+     * Calcula un UUID determinista a partir de las partes unidas por un separador interno; es la
+     * base de las claves de idempotencia y del identificador {@code po-} de la orden.
+     */
     private static String stableId(String... parts) {
         String joined = String.join(KEY_SEPARATOR, parts);
         return UUID.nameUUIDFromBytes(joined.getBytes(StandardCharsets.UTF_8)).toString();
     }
 
+    /**
+     * Normaliza el monto sin ceros finales para que valores equivalentes (15000 y 15000.0)
+     * generen la misma clave de idempotencia.
+     */
     private static String amountKey(Number amount) {
         return new BigDecimal(amount.toString()).stripTrailingZeros().toPlainString();
     }

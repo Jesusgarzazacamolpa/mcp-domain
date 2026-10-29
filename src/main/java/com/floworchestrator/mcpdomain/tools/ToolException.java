@@ -19,6 +19,9 @@ public class ToolException extends RuntimeException {
         this.retryable = retryable;
     }
 
+    /**
+     * Crea el error MISSING_ARGUMENT con una pista para que el modelo pida el dato al usuario.
+     */
     public static ToolException missingArgument(String toolName, String field, String hint) {
         return new ToolException(
                 "MISSING_ARGUMENT",
@@ -29,6 +32,9 @@ public class ToolException extends RuntimeException {
                 false);
     }
 
+    /**
+     * Crea el error INVALID_ARGUMENT indicando el formato esperado del campo.
+     */
     public static ToolException invalidArgument(String toolName, String field, String expected) {
         return new ToolException(
                 "INVALID_ARGUMENT",

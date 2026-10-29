@@ -16,6 +16,7 @@ import java.util.function.Supplier;
 /**
  * Almacena el resultado de operaciones de escritura para que un reintento con la
  * misma clave devuelva la respuesta original en lugar de duplicar el efecto.
+ * La caché es en memoria, admite 1000 entradas y retiene cada resultado 2 horas.
  */
 @Component
 @Slf4j
@@ -29,6 +30,10 @@ public class IdempotencyStore {
             .expireAfterWrite(RETENTION)
             .build();
 
+    /**
+     * Devuelve el resultado guardado para {@code key} o ejecuta {@code action} una sola vez y
+     * lo almacena; añade {@code idempotent_replay=true} cuando la respuesta viene de la caché.
+     */
     public Map<String, Object> getOrCompute(String key, Supplier<Map<String, Object>> action) {
         AtomicBoolean executed = new AtomicBoolean(false);
         Map<String, Object> stored = results.get(key, ignored -> {

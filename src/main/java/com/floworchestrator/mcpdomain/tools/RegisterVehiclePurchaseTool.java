@@ -7,6 +7,10 @@ import org.springframework.stereotype.Component;
 
 import java.util.Map;
 
+/**
+ * Tool MCP {@code register_vehicle_purchase}: registra la orden de compra que vincula cliente,
+ * vehículo y agente de ventas, con idempotencia por clave explícita o derivada.
+ */
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -16,6 +20,10 @@ public class RegisterVehiclePurchaseTool {
 
     private final VehicleDomainService vehicleDomainService;
 
+    /**
+     * Ejecuta {@code register_vehicle_purchase}; requiere {@code customer_id}, {@code vehicle_id} y
+     * {@code sales_agent_id}, acepta {@code idempotency_key} opcional y devuelve la orden o un error.
+     */
     public ToolResponse execute(Map<String, Object> arguments) {
         return ToolSupport.execute(TOOL_NAME, arguments, args -> {
             String customerId = ToolArguments.requireString(args, "customer_id", TOOL_NAME);

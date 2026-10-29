@@ -16,6 +16,10 @@ public final class ToolSupport {
     private ToolSupport() {
     }
 
+    /**
+     * Ejecuta la acción con argumentos no nulos, mide la duración y convierte cualquier excepción
+     * en una respuesta de error, de modo que ningún fallo escape al servidor MCP.
+     */
     public static ToolResponse execute(
             String toolName, Map<String, Object> arguments, Function<Map<String, Object>, Map<String, Object>> action) {
         Map<String, Object> safeArguments = arguments == null ? Map.of() : arguments;

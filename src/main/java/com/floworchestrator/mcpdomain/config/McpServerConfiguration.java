@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.floworchestrator.mcpdomain.service.PaymentDefaults;
 import com.floworchestrator.mcpdomain.tools.RegisterVehiclePurchaseTool;
+import com.floworchestrator.mcpdomain.tools.RequestFinancingApprovalTool;
 import com.floworchestrator.mcpdomain.tools.SetPaymentMethodTool;
 import com.floworchestrator.mcpdomain.tools.ToolErrors;
 import com.floworchestrator.mcpdomain.tools.ToolFlowCodes;
@@ -27,6 +28,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Supplier;
 
+/**
+ * Registra el servidor MCP sobre HTTP streamable en {@code /mcp}: publica las cuatro tools
+ * de negocio, el recurso {@code payment-defaults} y el manejo de errores del protocolo.
+ */
 @Configuration
 @Slf4j
 public class McpServerConfiguration {
@@ -44,6 +49,8 @@ public class McpServerConfiguration {
             argumentos devuelve el resultado original en lugar de crear un duplicado. Nunca inventes
             identificadores: si falta un valor obligatorio, pídelo al usuario. Cuando una herramienta devuelva
             status=ERROR, lee how_to_fix y síguelo antes de reintentar.
+            Si el flujo incluye financiamiento, llama a request_financing_approval sin decision para solicitar
+            la autorización humana y vuelve a llamarla con decision=APPROVED cuando el operador apruebe.
             """;
 
     private static final String SERIALIZATION_ERROR_PAYLOAD = """
@@ -51,6 +58,9 @@ public class McpServerConfiguration {
             respuesta que no se pudo serializar.","how_to_fix":"No reintentes la misma llamada; informa el \
             fallo al usuario.","retryable":false}""";
 
+    /**
+     * Crea el transporte HTTP streamable que atiende el endpoint {@code /mcp}.
+     */
     @Bean
     public HttpServletStreamableServerTransportProvider mcpTransportProvider() {
         return HttpServletStreamableServerTransportProvider.builder()
@@ -59,18 +69,26 @@ public class McpServerConfiguration {
                 .build();
     }
 
+    /**
+     * Publica el transporte MCP como servlet de Spring Boot en {@code /mcp}.
+     */
     @Bean
     public ServletRegistrationBean<Servlet> mcpServlet(
             HttpServletStreamableServerTransportProvider transportProvider) {
         return new ServletRegistrationBean<>(transportProvider, "/mcp");
     }
 
+    /**
+     * Construye el servidor MCP sincrónico, registra las tools y el recurso de valores por
+     * defecto, y lo cierra al apagar el contexto.
+     */
     @Bean(destroyMethod = "close")
     public McpSyncServer mcpServer(
             HttpServletStreamableServerTransportProvider transportProvider,
             VehicleInformationTool vehicleInformationTool,
             RegisterVehiclePurchaseTool registerVehiclePurchaseTool,
             SetPaymentMethodTool setPaymentMethodTool,
+            RequestFinancingApprovalTool requestFinancingApprovalTool,
             ObjectMapper objectMapper) {
         McpSyncServer server = McpServer.sync(transportProvider)
                 .serverInfo("mcp-domain", SERVER_VERSION)
@@ -85,16 +103,22 @@ public class McpServerConfiguration {
         server.addTool(vehicleInformationTool(vehicleInformationTool, objectMapper));
         server.addTool(registerVehiclePurchaseTool(registerVehiclePurchaseTool, objectMapper));
         server.addTool(setPaymentMethodTool(setPaymentMethodTool, objectMapper));
+        server.addTool(requestFinancingApprovalTool(requestFinancingApprovalTool, objectMapper));
         server.addResource(paymentDefaultsResource(objectMapper));
-        log.info("[{}] Servidor MCP inicializado | tools=[{}, {}, {}], resource={}",
+        log.info("[{}] Servidor MCP inicializado | tools=[{}, {}, {}, {}], resource={}",
                 ToolFlowCodes.SERVER,
                 VehicleInformationTool.TOOL_NAME,
                 RegisterVehiclePurchaseTool.TOOL_NAME,
                 SetPaymentMethodTool.TOOL_NAME,
+                RequestFinancingApprovalTool.TOOL_NAME,
                 PAYMENT_DEFAULTS_URI);
         return server;
     }
 
+    /**
+     * Define la tool {@code get_vehicle_information} (solo lectura, parámetro obligatorio
+     * {@code vehicle_id}) y su esquema JSON.
+     */
     SyncToolSpecification vehicleInformationTool(
             VehicleInformationTool vehicleInformationTool, ObjectMapper objectMapper) {
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -130,6 +154,10 @@ public class McpServerConfiguration {
                 .build();
     }
 
+    /**
+     * Define la tool {@code register_vehicle_purchase} (escritura idempotente, requiere
+     * {@code customer_id}, {@code vehicle_id} y {@code sales_agent_id}) y su esquema JSON.
+     */
     SyncToolSpecification registerVehiclePurchaseTool(
             RegisterVehiclePurchaseTool registerVehiclePurchaseTool, ObjectMapper objectMapper) {
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -181,6 +209,10 @@ public class McpServerConfiguration {
                 .build();
     }
 
+    /**
+     * Define la tool {@code set_payment_method} (requiere {@code purchase_order_id} y aplica
+     * los valores por defecto publicados) y su esquema JSON.
+     */
     SyncToolSpecification setPaymentMethodTool(
             SetPaymentMethodTool setPaymentMethodTool, ObjectMapper objectMapper) {
         Map<String, Object> properties = new LinkedHashMap<>();
@@ -229,6 +261,52 @@ public class McpServerConfiguration {
                 .build();
     }
 
+    /**
+     * Define la tool {@code request_financing_approval} (requiere {@code purchase_order_id} y
+     * acepta {@code decision} opcional) y su esquema JSON.
+     */
+    SyncToolSpecification requestFinancingApprovalTool(
+            RequestFinancingApprovalTool requestFinancingApprovalTool, ObjectMapper objectMapper) {
+        Map<String, Object> properties = new LinkedHashMap<>();
+        properties.put("purchase_order_id", stringProperty(
+                "Identificador de la orden de compra devuelto por register_vehicle_purchase. Obligatorio.",
+                "po-9f2c1e"));
+        properties.put("decision", optionalStringProperty(
+                "Decisión del operador humano sobre el financiamiento. Omite este campo en la primera llamada "
+                        + "para solicitar la autorización; envíalo con 'APPROVED' cuando el mensaje del operador "
+                        + "indique que el financiamiento fue aprobado.",
+                "APPROVED"));
+
+        McpSchema.Tool tool = McpSchema.Tool.builder(
+                        RequestFinancingApprovalTool.TOOL_NAME,
+                        objectSchema(properties, List.of("purchase_order_id")))
+                .title("Autorizar financiamiento")
+                .description("""
+                        Solicita la autorización humana de un financiamiento. Llama primero a \
+                        register_vehicle_purchase para obtener el purchase_order_id. Sin decision, la \
+                        respuesta contiene requiresIntervention=true y el flujo se pausa hasta que un operador \
+                        resuelva la intervención en el Control Center. Cuando el operador apruebe, el flujo se \
+                        reanuda y debes volver a llamar a esta herramienta con decision='APPROVED'. Si el \
+                        operador rechaza, no vuelvas a llamar: el proceso se cancela.""")
+                .annotations(McpSchema.ToolAnnotations.builder()
+                        .title("Autorizar financiamiento")
+                        .readOnlyHint(false)
+                        .destructiveHint(false)
+                        .idempotentHint(true)
+                        .openWorldHint(false)
+                        .build())
+                .build();
+
+        return SyncToolSpecification.builder()
+                .tool(tool)
+                .callHandler((exchange, request) -> handle(RequestFinancingApprovalTool.TOOL_NAME, objectMapper,
+                        () -> requestFinancingApprovalTool.execute(request.arguments())))
+                .build();
+    }
+
+    /**
+     * Expone los valores por defecto de pago como recurso MCP de solo lectura.
+     */
     SyncResourceSpecification paymentDefaultsResource(ObjectMapper objectMapper) {
         McpSchema.Resource resource = McpSchema.Resource.builder()
                 .uri(PAYMENT_DEFAULTS_URI)
@@ -244,6 +322,10 @@ public class McpServerConfiguration {
                         PAYMENT_DEFAULTS_URI, JSON_MIME_TYPE, paymentDefaultsJson(objectMapper)))));
     }
 
+    /**
+     * Ejecuta la tool y convierte cualquier excepción en una respuesta de error MCP, de modo
+     * que ningún fallo escape al transporte.
+     */
     private McpSchema.CallToolResult handle(
             String toolName, ObjectMapper objectMapper, Supplier<ToolResponse> call) {
         try {
@@ -253,6 +335,10 @@ public class McpServerConfiguration {
         }
     }
 
+    /**
+     * Serializa el payload como texto JSON y marca {@code isError}; si la serialización falla,
+     * responde con el payload de error fijo.
+     */
     private McpSchema.CallToolResult toCallResult(ObjectMapper objectMapper, ToolResponse response) {
         try {
             return McpSchema.CallToolResult.builder()

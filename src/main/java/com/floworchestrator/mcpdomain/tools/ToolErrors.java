@@ -15,6 +15,10 @@ public final class ToolErrors {
     private ToolErrors() {
     }
 
+    /**
+     * Traduce la excepción a una respuesta MCP de error, evaluando en orden ToolException,
+     * vehículo no encontrado, 404/409/4xx/5xx de Feign, IllegalArgumentException y error interno.
+     */
     public static ToolResponse toResponse(String toolName, Exception exception) {
         String flowCode = ToolFlowCodes.forTool(toolName);
         if (exception instanceof ToolException toolException) {
